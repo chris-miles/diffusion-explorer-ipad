@@ -155,8 +155,10 @@ export class ConditionalDiffusionModel extends ConditionalModel {
                 // Randomly sample integers from 0 too condDim - 1
                 console.log("Epoch ", epoch);
                 const condIndices: tf.Tensor1D = tf.randomUniform([200], 0, this.condDim, 'int32');
-                const samples = this.sample(200, 100, { cond: condIndices, guidanceScale: 5.0 });
-                endEpochCallback(epoch, samples.arraySync().map((s: any) => s.flat()));
+                const samples = await this.sample(200, 100, { cond: condIndices, guidanceScale: 5.0 });
+                const last = samples.gather(samples.shape[0] - 1);
+                endEpochCallback(epoch, last.arraySync() as number[][]);
+                last.dispose(); samples.dispose(); condIndices.dispose();
             }
 
             await tf.nextFrame();
@@ -168,8 +170,11 @@ export class ConditionalDiffusionModel extends ConditionalModel {
     sample(
         num_samples: number,
         num_total_steps: number = this.T,
-        options: { cond?: tf.Tensor1D | tf.Tensor2D | number[], guidanceScale?: number, return_guidance?: boolean } = {}
+        options: { cond?: tf.Tensor1D | tf.Tensor2D | number[], guidanceScale?: number, return_guidance?: boolean } = {},
+        perStepCallback?: (step: number, x: number[][]) => void,
+        shouldStop: () => boolean = () => false
     ): any {
+        const ownsCond = !options.cond || Array.isArray(options.cond);
         let { cond, guidanceScale = 0, return_guidance = false } = options;
 
         // Convert array-based cond to tensor if needed
@@ -186,7 +191,7 @@ export class ConditionalDiffusionModel extends ConditionalModel {
         const initial_points = tf.randomNormal([num_samples, this.dim]);
 
         // Delegate to sample_from_initial_points
-        return this.sample_from_initial_points(initial_points, num_total_steps, { cond, guidanceScale, return_guidance });
+        return this.sample_from_initial_points(initial_points, num_total_steps, { cond, guidanceScale, return_guidance }, perStepCallback, shouldStop).finally(() => { initial_points.dispose(); if (ownsCond) (cond as tf.Tensor)?.dispose(); });
     }
 
     /** Sampling from initial points */
@@ -197,8 +202,11 @@ export class ConditionalDiffusionModel extends ConditionalModel {
             cond?: tf.Tensor1D | tf.Tensor2D | number[],
             guidanceScale?: number,
             return_guidance?: boolean
-        } = {}
+        } = {},
+        perStepCallback?: (step: number, x: number[][]) => void,
+        shouldStop: () => boolean = () => false
     ): any {
+        const ownsCond = !options.cond || Array.isArray(options.cond);
         let { cond, guidanceScale = 0, return_guidance = false } = options;
 
         // If initial_points is an array convert it to tf.Tensor2D
@@ -217,48 +225,55 @@ export class ConditionalDiffusionModel extends ConditionalModel {
             cond = tf.randomUniform([numSamples], 0, this.condDim, 'int32') as tf.Tensor1D;
         }
 
-        return tf.tidy(() => {
-            // If cond is 1D then convert to one-hot
-            let condTensor = cond!;
-            if (cond!.rank === 1) {
-                const cond_expanded = cond as tf.Tensor1D;
-                const numClasses = this.condDim;
-                condTensor = this.convertToOneHot(cond_expanded, numClasses);
-            }
-            // Make sure that initial points and cond have same number of samples
-            if (initial_points.shape[0] !== condTensor.shape[0]) {
-                throw new Error('Initial points and conditioning must have the same number of samples');
-            }
+        const run = async () => {
+            const labels = cond!;
+            const condTensor = labels.rank === 1
+                ? this.convertToOneHot(labels as tf.Tensor1D, this.condDim)
+                : labels as tf.Tensor2D;
+            if (initial_points.shape[0] !== condTensor.shape[0]) throw new Error('Initial points and conditioning must have the same number of samples');
+            const frames = Math.max(1, Math.min(this.T, Math.round(num_total_steps)));
+            const saveEvery = Math.max(1, Math.floor(this.T / frames));
+            const traj: tf.Tensor2D[] = [initial_points];
+            const epsConds: tf.Tensor2D[] = [], epsUnconds: tf.Tensor2D[] = [], epsHats: tf.Tensor2D[] = [];
             let x = initial_points;
-            const traj: tf.Tensor2D[] = [];
-            const steps = [...Array(num_total_steps).keys()].reverse();
-            const epsConds: tf.Tensor2D[] = [];
-            const epsUnconds: tf.Tensor2D[] = [];
-            const epsHats: tf.Tensor2D[] = [];
-
-            for (const t of steps) {
-                const tInt = tf.fill([x.shape[0]], t, 'int32');
-                const stepOutput = this.step(x, tInt, tInt, condTensor, guidanceScale);
-                traj.push(stepOutput.mean);
-                if (return_guidance) {
-                    epsConds.push(stepOutput.epsCond);
-                    epsUnconds.push(stepOutput.epsUncond);
-                    epsHats.push(stepOutput.eps_hat);
+            for (let t = this.T - 1; t >= 0; t--) {
+                if (shouldStop()) {
+                    if (!traj.includes(x)) x.dispose();
+                    traj.slice(1).forEach(v => v.dispose());
+                    [...epsConds, ...epsUnconds, ...epsHats].forEach(v => v.dispose());
+                    if (condTensor !== labels) condTensor.dispose();
+                    return null;
                 }
-                x = stepOutput.mean;
+                const output = tf.tidy(() => {
+                    const tInt = tf.fill([x.shape[0]], t, 'int32');
+                    return this.step(x, tInt, tInt, condTensor, guidanceScale);
+                });
+                if (!traj.includes(x)) x.dispose();
+                x = output.mean;
+                const save = (this.T - t) % saveEvery === 0 || t === 0;
+                if (save) traj.push(x);
+                if (return_guidance && guidanceScale > 0 && save) {
+                    epsConds.push(output.epsCond); epsUnconds.push(output.epsUncond); epsHats.push(output.eps_hat);
+                } else {
+                    output.epsCond?.dispose(); output.epsUncond?.dispose(); output.eps_hat.dispose();
+                }
+                if (save) {
+                    perStepCallback?.(traj.length - 2, x.arraySync() as number[][]);
+                    await tf.nextFrame();
+                }
             }
-
-            if (return_guidance) {
-                return {
-                    traj: tf.stack(traj),
-                    epsCond: guidanceScale > 0 ? tf.stack(epsConds) : null,
-                    epsUncond: guidanceScale > 0 ? tf.stack(epsUnconds) : null,
-                    epsHat: guidanceScale > 0 ? tf.stack(epsHats) : null
-                };
-            } else {
-                return tf.stack(traj);
-            }
-        });
+            const result = return_guidance ? {
+                traj: tf.stack(traj),
+                epsCond: epsConds.length ? tf.stack(epsConds) : null,
+                epsUncond: epsUnconds.length ? tf.stack(epsUnconds) : null,
+                epsHat: epsHats.length ? tf.stack(epsHats) : null,
+            } : tf.stack(traj);
+            traj.slice(1).forEach(t => t.dispose());
+            [...epsConds, ...epsUnconds, ...epsHats].forEach(t => t.dispose());
+            if (condTensor !== labels) condTensor.dispose();
+            return result;
+        };
+        return run().finally(() => { if (ownsCond) (cond as tf.Tensor)?.dispose(); });
     }
 
     /**
@@ -276,9 +291,9 @@ export class ConditionalDiffusionModel extends ConditionalModel {
         options: { cond?: tf.Tensor1D | tf.Tensor2D | number[], guidanceScale?: number, return_guidance?: boolean } = {}
     ): any {
         // Generate uniform grid
-        const initialPoints = generateUniformGridSamples(gridResolution, domainRange, 'tensor') as tf.Tensor2D;
+        const initialPoints = generateUniformGridSamples(gridResolution, domainRange, true) as tf.Tensor2D;
 
         // Sample from the initial points
-        return this.sample_from_initial_points(initialPoints, num_total_steps, options);
+        return this.sample_from_initial_points(initialPoints, num_total_steps, options).finally(() => initialPoints.dispose());
     }
 }

@@ -1,6 +1,6 @@
 import { base } from '$app/paths';
 
-import { FlowModel, DiffusionModel, ConditionalDiffusionModel, type NetworkType } from '@diffusion-explorer/diffusion';
+import { FlowModel, DiffusionModel, ConditionalDiffusionModel } from '@diffusion-explorer/diffusion';
 
 export const backend: "webgl" | "wasm" = "webgl";
 
@@ -76,6 +76,9 @@ export const cachedSamplesPaths: Record<string, Record<string, string>> = {
     "Diffusion": {
         "Smiley Face": "/cached_samples/diffusion_smiley_face_samples.json",
     },
+    "Conditional Diffusion": {
+        "Three Modes": "/cached_samples/conditional_diffusion_three_modes_samples.json",
+    },
 }
 
 export const cachedGridSamplesPaths: Record<string, Record<string, string>> = {
@@ -85,6 +88,9 @@ export const cachedGridSamplesPaths: Record<string, Record<string, string>> = {
     },
     "Diffusion": {
         "Smiley Face": "/cached_samples/diffusion_smiley_face_grid.json",
+    },
+    "Conditional Diffusion": {
+        "Three Modes": "/cached_samples/conditional_diffusion_three_modes_grid.json",
     },
 }
 
@@ -98,7 +104,6 @@ export interface ModelConfig {
     dim: number;
     hidden: number;
     condDim?: number;
-    networkType?: NetworkType;  // 'simple' or 'improved' (for diffusion models)
 }
 
 export const trainingObjectiveToModelConfig: Record<string, ModelConfig> = {
@@ -108,8 +113,7 @@ export const trainingObjectiveToModelConfig: Record<string, ModelConfig> = {
     },
     "Diffusion": {
         dim: 2,
-        hidden: 128,
-        networkType: 'improved',  // Use improved network with positional embeddings
+        hidden: 64,
     },
     "Conditional Diffusion": {
         dim: 2,
@@ -152,8 +156,6 @@ export const interfaceSettings: {
     mainAreaHeight: number;
     displayAreaWidth: number;
     displayAreaHeight: number;
-    pointColor: string;
-    scatterPlotOpacity: number;
 } = {
     distributionWidth: 500,
     distributionHeight: 500,

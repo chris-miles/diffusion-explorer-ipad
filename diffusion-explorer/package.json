@@ -2,8 +2,9 @@
   "name": "diffusion-explorer",
   "private": true,
   "workspaces": [
-    "apps/*",
-    "packages/*"
+    "apps/diffusion-explorer",
+    "packages/diffusion",
+    "packages/ui"
   ],
   "dependencies": {}
 }

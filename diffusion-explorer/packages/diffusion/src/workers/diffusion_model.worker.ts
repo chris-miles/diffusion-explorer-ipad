@@ -4,7 +4,7 @@
  */
 import * as tf from "@tensorflow/tfjs";
 import { setWasmPaths } from "@tensorflow/tfjs-backend-wasm";
-setWasmPaths("/tfjs-backend-wasm/");
+setWasmPaths(new URL("../tfjs-backend-wasm/", self.location.href).href);
 import "@tensorflow/tfjs-backend-wasm";
 
 import { DiffusionModel } from '../diffusion/diffusion';
@@ -12,7 +12,7 @@ import { DiffusionModel } from '../diffusion/diffusion';
 const backend = "webgl";
 
 // ===== Request tracking for cancellation =====
-const activeRequests = new Map<string, { cancelled: boolean }>();
+const activeRequests = new Map<string, { cancelled: boolean; type: string }>();
 
 // Global unhandled rejection handler
 self.addEventListener('unhandledrejection', (event) => {
@@ -54,8 +54,13 @@ async function saveModel(model: tf.LayersModel, name: string) {
 
 async function initializeBackend() {
   if (backend === "webgl") {
-    await tf.setBackend("webgl");
-    await tf.ready();
+    try {
+      if (!await tf.setBackend("webgl")) throw new Error("WebGL unavailable");
+      await tf.ready();
+    } catch {
+      await tf.setBackend("wasm");
+      await tf.ready();
+    }
   } else if (backend === "wasm") {
     await tf.setBackend("wasm");
     await tf.ready();
@@ -207,12 +212,13 @@ self.onmessage = async (e) => {
       req.cancelled = true;
     }
     console.log("[Diffusion Worker] Cancel requested:", requestId || "all");
-    self.postMessage({ requestId, type: 'cancelled' });
+    // Training returns the saved partial model after its next cooperative stop.
+    if (req?.type !== 'train' && req?.type !== 'train_rectified') self.postMessage({ requestId, type: 'cancelled' });
     return;
   }
 
   // Track new request
-  activeRequests.set(requestId, { cancelled: false });
+  activeRequests.set(requestId, { cancelled: false, type });
 
   try {
     console.log('[Diffusion Worker] Received message:', { requestId, type, timestamp: Date.now() });
@@ -233,7 +239,7 @@ self.onmessage = async (e) => {
     }
   } catch (error) {
     const shouldStop = () => activeRequests.get(requestId)?.cancelled ?? false;
-    if (!shouldStop()) {
+    if (!shouldStop() || type === 'train' || type === 'train_rectified') {
       console.error('[Diffusion Worker] Error in message handler:', error);
       self.postMessage({
         requestId,

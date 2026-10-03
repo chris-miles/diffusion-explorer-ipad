@@ -17,7 +17,7 @@
     plotMeshGrid,
     drawTrajectories,
     type TrajectoryStyleOptions,
-  } from "@diffusion-explorer/ui";
+  } from "@diffusion-explorer/ui/explorer";
   import {
     FlowModelClient,
     DiffusionModelClient,
@@ -73,7 +73,8 @@
   type AnimationState = {
     time: number;
   };
-  let timeline: Timeline<AnimationState>;
+
+  let player: Player<AnimationState> | null = null;
 
   // Path plot state
   let pathClient: FlowModelClient | DiffusionModelClient | null = null;
@@ -291,17 +292,17 @@
 
   function setupTimeline() {
     const tl = Timeline.from<AnimationState>({
-      duration: 1,
+      duration: 8,
       initialState: { time: 0 },
       clips: [
-        { clip: forwardClip, ...{ start: 0, end: 1 } },
+        { clip: forwardClip, start: 0, end: 1 },
       ],
     });
     player = new Player(tl, { looping: true });
 
     // Sync timeline state to playbackState store and trigger redraw
     player.onTick((_t, state) => {
-      playbackState.update((p) => ({ ...p, time: state.time }));
+      playbackState.update((p) => ({ ...p, time: state.time, isPlaying: player!.isPlaying }));
       drawForeground(state);
     });
   }
@@ -482,14 +483,14 @@
   ) {
     if (!ctx || !trajectory || trajectory.length === 0) return;
 
-    const numSteps = $config.numberOfSteps || 100;
+    const numSteps = isStreaming ? ($config.numberOfSteps || 100) : trajectory.length - 1;
     const timeIndex = Math.floor(time * numSteps);
 
     // Trajectory is in DOMAIN coordinates (from model sampling), convert to pixel coords
     // Each point also needs temporal x offset based on its time step
     const xRange = width - distWidth; // Total x translation range (0 to 800)
     const pixelTrajectory = trajectory.map((p, i) => {
-      const pointTime = i / (numSteps - 1 || 1);
+      const pointTime = i / (numSteps || 1);
       const xOffset = xRange * pointTime;
       return [domainToPixelX(p[0]) + xOffset, domainToPixelY(p[1])];
     });
@@ -512,12 +513,14 @@
       showHeadMarker: true,
       outline: {
         color: "white",
-        width: 7,
+        strokeWidth: 7,
         opacity: 0.3,
       },
     };
 
-    drawTrajectories(fgCanvas2d.canvas, [pixelTrajectory], segmentIndex, style);
+    // This canvas already holds scatter/contours in logical coordinates.
+    // Passing its context preserves those layers and the existing DPR transform.
+    drawTrajectories(ctx, [pixelTrajectory], segmentIndex, style);
   }
 
   // ----------------------------------------------------------------
@@ -660,11 +663,13 @@
     }
   }
 
-  // Dataset "brush" toggles off usePretrained
-  $: if ($config.datasetName === "brush") {
-    modelState.update((m) => ({ ...m, usePretrained: false }));
-  } else {
-    modelState.update((m) => ({ ...m, usePretrained: true }));
+  // Change the pretrained default only when the dataset itself changes.
+  // Plot toggles and sampler changes must preserve the user's checkbox choice.
+  let previousDatasetName: string | null = null;
+  $: if ($config.datasetName !== previousDatasetName) {
+    previousDatasetName = $config.datasetName;
+    const usePretrained = Boolean(pretrainedModelPaths[$config.trainingObjective]?.[$config.datasetName]);
+    modelState.update((m) => m.usePretrained === usePretrained ? m : { ...m, usePretrained });
   }
 
   // Training start/stop
@@ -803,6 +808,7 @@
     drawForeground(player.state);
   }
 
+  let previousPathModelKey = "";
   // Create path client when model/objective changes
   $: {
     const modelPath = pretrainedModelPaths[$config.trainingObjective]?.[
@@ -818,17 +824,19 @@
       hidden: 64,
     };
 
-    if (modelPath && typeof window !== "undefined") {
-      if ($config.trainingObjective === "Flow Matching") {
+    const pathModelKey = `${$config.trainingObjective}:${modelPath}`;
+    if (modelPath && pathModelKey !== previousPathModelKey && typeof window !== "undefined") {
+      previousPathModelKey = pathModelKey;
+      if ($config.trainingObjective === "Flow Matching" || $config.trainingObjective === "Conditional Diffusion") {
         pathClient = new FlowModelClient(
-          "/workers/flow_model.worker.js",
+          base + "/workers/flow_model.worker.js",
           modelPath,
           $config.trainingObjective,
           modelConfig
         );
       } else if ($config.trainingObjective === "Diffusion") {
         pathClient = new DiffusionModelClient(
-          "/workers/diffusion_model.worker.js",
+          base + "/workers/diffusion_model.worker.js",
           modelPath,
           modelConfig
         );
@@ -884,7 +892,9 @@
   </div>
   <div class="time-slider-wrapper">
     <TimeSlider
-      player={timeline as any}
+      timeline={player as any}
+      displayTime={$playbackState.time}
+      onSeekByDisplayTime={(t) => player?.seek(t)}
       disabled={$isTraining || $isEditing}
     />
   </div>

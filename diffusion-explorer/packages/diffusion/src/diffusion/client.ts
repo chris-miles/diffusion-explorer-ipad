@@ -475,7 +475,7 @@ export class DiffusionModelClient {
         trainingConfig: DiffusionTrainingConfig,
         onEpoch?: EpochCallback
     ): RequestResult<TrainingResult> {
-        return this.dispatch<TrainingResult>(
+        const request = this.dispatch<TrainingResult>(
             'train',
             {
                 trainingObjective: 'Diffusion',
@@ -485,5 +485,9 @@ export class DiffusionModelClient {
             },
             { onEpoch }
         );
+        return { requestId: request.requestId, promise: request.promise.then(result => {
+            this.modelJSONPath = result.tfModelPath;
+            return result;
+        }) };
     }
 }

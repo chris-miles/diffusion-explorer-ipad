@@ -661,7 +661,7 @@ export class FlowModelClient {
         trainingConfig: TrainingConfig,
         onEpoch?: EpochCallback
     ): RequestResult<TrainingResult> {
-        return this.dispatch<TrainingResult>(
+        const request = this.dispatch<TrainingResult>(
             'train',
             {
                 trainingObjective: this.trainingObjective,
@@ -671,6 +671,10 @@ export class FlowModelClient {
             },
             { onEpoch }
         );
+        return { requestId: request.requestId, promise: request.promise.then(result => {
+            this.modelJSONPath = result.tfModelPath;
+            return result;
+        }) };
     }
 
     /**

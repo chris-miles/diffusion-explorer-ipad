@@ -203,13 +203,9 @@ export class DiffusionModel extends Model {
         const initial_points = tf.randomNormal([num_samples, this.dim]);
 
         // Delegate to sample_from_initial_points
-        return this.sample_from_initial_points(
-            initial_points,
-            num_total_steps,
-            options,
-            perStepCallback,
-            shouldStop
-        );
+        try {
+            return await this.sample_from_initial_points(initial_points, num_total_steps, options, perStepCallback, shouldStop);
+        } finally { initial_points.dispose(); }
     }
 
     /**
@@ -231,23 +227,18 @@ export class DiffusionModel extends Model {
         const scheduler = options.scheduler ?? 'ddpm';
         const num_samples = initial_points.shape[0];
 
-        // Compute step schedule (which timesteps to use)
-        // If num_total_steps < T, we skip some steps
-        const stepSize = Math.floor(this.T / num_total_steps);
-        const timesteps: number[] = [];
-        for (let t = this.T - 1; t >= 0; t -= stepSize) {
-            timesteps.push(t);
-        }
-        // Ensure we end at 0
-        if (timesteps[timesteps.length - 1] !== 0) {
-            timesteps.push(0);
-        }
+        // DDPM transitions are adjacent timesteps. Run the full chain and thin
+        // only the saved animation frames; skipping t with an adjacent-step
+        // posterior gives the wrong sampling distribution.
+        const frames = Math.max(1, Math.min(this.T, Math.round(num_total_steps)));
+        const saveEvery = Math.max(1, Math.floor(this.T / frames));
+        const timesteps = Array.from({ length: this.T }, (_, i) => this.T - 1 - i);
 
         let x_t: tf.Tensor2D = initial_points;
         const trajectory: tf.Tensor2D[] = [];
         trajectory.push(x_t);
 
-        for (let i = 0; i < timesteps.length - 1; i++) {
+        for (let i = 0; i < timesteps.length; i++) {
             // Check for cancellation
             if (shouldStop()) {
                 // Dispose all created tensors (skip initial_points at index 0)
@@ -265,16 +256,17 @@ export class DiffusionModel extends Model {
                 return this.step(x_t, tInt, scheduler);
             });
 
+            if (x_t !== initial_points && !trajectory.includes(x_t)) x_t.dispose();
             x_t = x_next;
-            trajectory.push(x_t);
+            if ((i + 1) % saveEvery === 0 || i === timesteps.length - 1) trajectory.push(x_t);
 
             // Call per-step callback if provided
-            if (perStepCallback) {
-                perStepCallback(i, x_t.arraySync() as number[][]);
+            if (perStepCallback && trajectory[trajectory.length - 1] === x_t) {
+                perStepCallback(trajectory.length - 2, x_t.arraySync() as number[][]);
             }
 
             // Yield to event loop
-            await tf.nextFrame();
+            if ((i + 1) % saveEvery === 0) await tf.nextFrame();
         }
 
         // Stack trajectory into a single tensor
@@ -310,13 +302,9 @@ export class DiffusionModel extends Model {
         const initialPoints = generateUniformGridSamples(gridResolution, domainRange, true);
 
         // Sample from the initial points
-        return this.sample_from_initial_points(
-            initialPoints,
-            num_total_steps,
-            options,
-            perStepCallback,
-            shouldStop
-        );
+        try {
+            return await this.sample_from_initial_points(initialPoints, num_total_steps, options, perStepCallback, shouldStop);
+        } finally { initialPoints.dispose(); }
     }
 
     /**

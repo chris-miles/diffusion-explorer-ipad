@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { createEventDispatcher } from 'svelte';
+    const dispatch = createEventDispatcher<{ change: string }>();
     export let options: string[];
     export let value: string;
     export let disabled: boolean = false;
@@ -80,7 +82,7 @@
         class="select"
         class:disabled={disabled}
     >
-        <select bind:value={value}>
+        <select bind:value={value} {disabled} on:change={(event) => dispatch('change', event.currentTarget.value)}>
             {#each options as option}
                 <option value={option}>{option}</option>
             {/each}

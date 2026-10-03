@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import type { Player } from '@diffusion-explorer/ui';
+  import type { Player } from '../animation/explorer-player';
   import Slider from './Slider.svelte';
 
   // Props

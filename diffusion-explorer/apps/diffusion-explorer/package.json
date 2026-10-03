@@ -6,12 +6,12 @@
 	"scripts": {
 		"dev": "vite dev",
 		"bundle-workers": "node scripts/bundle-workers.js",
-		"build": "npm run bundle-workers && vite build",
+		"build": "node scripts/copy-wasm.js && npm run bundle-workers && vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-		"postinstall": "cp -r node_modules/@tensorflow/tfjs-backend-wasm/dist/*.wasm static/tfjs-backend-wasm/",
+		"postinstall": "node scripts/copy-wasm.js",
 		"predeploy": "npm run build",
 		"deploy": "touch build/.nojekyll; gh-pages -d build",
 		"train": "tsx scripts/train.ts",
@@ -22,6 +22,7 @@
 	},
 	"devDependencies": {
 		"@diffusion-explorer/diffusion": "*",
+		"@diffusion-explorer/ui": "*",
 		"@sveltejs/adapter-auto": "^6.0.0",
 		"@sveltejs/adapter-static": "^3.0.8",
 		"@sveltejs/kit": "^2.16.0",

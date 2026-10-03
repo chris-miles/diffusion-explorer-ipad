@@ -4,11 +4,12 @@
  */
 import * as tf from "@tensorflow/tfjs";
 import { setWasmPaths } from "@tensorflow/tfjs-backend-wasm";
-setWasmPaths("/tfjs-backend-wasm/");
+setWasmPaths(new URL("../tfjs-backend-wasm/", self.location.href).href);
 import "@tensorflow/tfjs-backend-wasm";
 
 import { FlowModel } from '../flow_matching/flow_matching';
 import { ConditionalFlowModel } from '../flow_matching/conditional_flow_matching';
+import { ConditionalDiffusionModel } from '../diffusion/conditional_diffusion';
 import { generateUniformGridSamples } from '../utils';
 
 const backend = "webgl";
@@ -18,10 +19,11 @@ const backend = "webgl";
 const trainingObjectiveToModelClass: Record<string, any> = {
   "Flow Matching": FlowModel,
   "Conditional Flow Matching": ConditionalFlowModel,
+  "Conditional Diffusion": ConditionalDiffusionModel,
 };
 
 // ===== Request tracking for cancellation =====
-const activeRequests = new Map<string, { cancelled: boolean }>();
+const activeRequests = new Map<string, { cancelled: boolean; type: string }>();
 
 // ===== Logging control =====
 let verbose = false;
@@ -73,8 +75,13 @@ async function saveModel(model: tf.LayersModel, path: string) {
 
 async function initializeBackend() {
   if (backend === "webgl") {
-    await tf.setBackend("webgl");
-    await tf.ready();
+    try {
+      if (!await tf.setBackend("webgl")) throw new Error("WebGL unavailable");
+      await tf.ready();
+    } catch {
+      await tf.setBackend("wasm");
+      await tf.ready();
+    }
   } else if (backend === "wasm") {
     await tf.setBackend("wasm");
     await tf.ready();
@@ -196,6 +203,14 @@ async function handleSamplingRequest(
     return;
   }
 
+  // Conditional guidance returns tensors alongside the trajectory.
+  if (allSamples && !(allSamples instanceof tf.Tensor)) {
+    const result = allSamples as any;
+    guidanceData = { epsCond: result.epsCond?.arraySync(), epsUncond: result.epsUncond?.arraySync(), epsHat: result.epsHat?.arraySync() };
+    result.epsCond?.dispose(); result.epsUncond?.dispose(); result.epsHat?.dispose();
+    allSamples = result.traj;
+  }
+
   // Check if cancelled or null result
   if (shouldStop() || allSamples === null) {
     log('Request cancelled:', requestId);
@@ -260,8 +275,8 @@ async function handleTrainRequest(requestId: string, data: any) {
       trainingConfig.epochs,
       trainingConfig.batchSize,
       trainingConfig.updateInterval,
-      shouldStop,
       emitEpoch,
+      shouldStop,
     );
   } else if (trainingObjective === "Conditional Flow Matching") {
     if (classesTensor === null) {
@@ -392,12 +407,13 @@ self.onmessage = async (e) => {
       req.cancelled = true;
     }
     log("Cancel requested:", requestId || "all");
-    self.postMessage({ requestId, type: 'cancelled' });
+    // Training returns the saved partial model after its next cooperative stop.
+    if (req?.type !== 'train' && req?.type !== 'train_rectified') self.postMessage({ requestId, type: 'cancelled' });
     return;
   }
 
   // Track new request
-  activeRequests.set(requestId, { cancelled: false });
+  activeRequests.set(requestId, { cancelled: false, type });
 
   try {
     log('Received message:', { requestId, type, timestamp: Date.now() });
@@ -423,7 +439,7 @@ self.onmessage = async (e) => {
     }
   } catch (error) {
     const shouldStop = () => activeRequests.get(requestId)?.cancelled ?? false;
-    if (!shouldStop()) {
+    if (!shouldStop() || type === 'train' || type === 'train_rectified') {
       console.error('[FlowModel Worker] Error in message handler:', error);
       self.postMessage({
         requestId,

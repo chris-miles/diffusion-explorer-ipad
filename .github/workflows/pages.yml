@@ -1,0 +1,57 @@
+name: Publish Diffusion Explorer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: diffusion-explorer/package-lock.json
+      - uses: actions/configure-pages@v5
+        id: pages
+      # Browser training uses TensorFlow.js; native tfjs-node is only for offline
+      # cache-generation scripts, so its platform-specific install is unnecessary.
+      - name: Install browser dependencies
+        working-directory: diffusion-explorer
+        run: npm ci --ignore-scripts
+      - name: Verify playback and diffusion sampling
+        working-directory: diffusion-explorer
+        run: |
+          npx tsx packages/ui/tests/explorer-player.test.ts
+          npx tsx packages/diffusion/tests/ddpm-regression.mts
+      - name: Build static application
+        working-directory: diffusion-explorer
+        env:
+          BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run build --workspace=diffusion-explorer-app
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: diffusion-explorer/apps/diffusion-explorer/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

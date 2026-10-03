@@ -20,8 +20,8 @@ import {
 import type { MainState } from './state';
 
 // Worker URLs (bundled to static/workers/ for production)
-const flowModelWorkerUrl = '/workers/flow_model.worker.js';
-const diffusionModelWorkerUrl = '/workers/diffusion_model.worker.js';
+const flowModelWorkerUrl = base + '/workers/flow_model.worker.js';
+const diffusionModelWorkerUrl = base + '/workers/diffusion_model.worker.js';
 
 /**
  * Create the appropriate model client based on training objective.
@@ -31,7 +31,7 @@ function createModelClient(
     modelPath: string,
     modelConfig: any
 ): FlowModelClient | DiffusionModelClient {
-    if (trainingObjective === 'Flow Matching') {
+    if (trainingObjective === 'Flow Matching' || trainingObjective === 'Conditional Diffusion') {
         return new FlowModelClient(flowModelWorkerUrl, modelPath, trainingObjective, modelConfig);
     }
     if (trainingObjective === 'Diffusion') {
@@ -163,8 +163,19 @@ export function createMainStateHandlers(state: MainState) {
     // Dataset & Config Change Handlers
     // ============================================================================
 
+    let distributionLoadId = 0;
+    let lastDistributionKey = '';
     async function handleDatasetChange() {
         const configVal = get(config);
+        // Normalize an objective transition before loading its previous dataset.
+        if (configVal.trainingObjective !== previousTrainingObjective) {
+            handleTrainingObjectiveChange();
+            return;
+        }
+        const key = `${configVal.trainingObjective}:${configVal.datasetName}:${get(modelState).usePretrained}`;
+        if (key === lastDistributionKey) return;
+        lastDistributionKey = key;
+        const loadId = ++distributionLoadId;
         const datasetDictVal = get(datasetDict);
         const gridResolution = settings.meshPlotSettings.gridResolution;
 
@@ -205,6 +216,7 @@ export function createMainStateHandlers(state: MainState) {
         if (cachedSamplesPath && cachedGridSamplesPath) {
             // Load and convert cached samples from domain coords to display coords
             const allSamples = await fetch(base + cachedSamplesPath).then(r => r.json());
+            if (loadId !== distributionLoadId) return;
             const convertedSamples = allSamples.map((samples: number[][], timeIdx: number) => {
                 const t = timeIdx / (allSamples.length - 1);
                 return convertDataToDisplayCoordinateFrame(
@@ -219,6 +231,7 @@ export function createMainStateHandlers(state: MainState) {
 
             // Load grid samples, convert to display coords, and reshape from [time, N, 2] to [time, x, y, 2]
             const gridSamplesFlat = await fetch(base + cachedGridSamplesPath).then(r => r.json());
+            if (loadId !== distributionLoadId) return;
             const gridRes = settings.meshPlotSettings.gridResolution;
 
             // Convert and reshape grid samples
@@ -247,13 +260,19 @@ export function createMainStateHandlers(state: MainState) {
         } else {
             console.log("No cached samples found.");
             // Regenerate samples using client-based API
-            const defaultModelPath = base + settings.pretrainedModelPaths[configVal.trainingObjective][configVal.datasetName];
+            const pretrainedPath = settings.pretrainedModelPaths[configVal.trainingObjective]?.[configVal.datasetName];
+            if (!pretrainedPath) {
+                distributionData.update(d => ({ ...d, allTime: undefined, allTimeGrid: undefined }));
+                return;
+            }
+            const defaultModelPath = base + pretrainedPath;
             const modelConfig = settings.trainingObjectiveToModelConfig[configVal.trainingObjective];
             const client = createModelClient(configVal.trainingObjective, defaultModelPath, modelConfig);
 
             // Sample trajectories
             const { promise: samplePromise } = client.sample(configVal.numSamples, configVal.numberOfSteps);
             samplePromise.then((allSamples: number[][][]) => {
+                if (loadId !== distributionLoadId) return;
                 // Convert from domain coords to display coords
                 const convertedSamples = allSamples.map((samples: number[][], timeIdx: number) => {
                     const t = timeIdx / (allSamples.length - 1);
@@ -278,6 +297,7 @@ export function createMainStateHandlers(state: MainState) {
                 : (client as DiffusionModelClient).sampleGrid(gridResolution, settings.domainRange as DomainRange, configVal.numberOfSteps);
 
             gridPromise.then((gridSamples: number[][][]) => {
+                if (loadId !== distributionLoadId) return;
                 // Convert from domain coords to display coords and reshape
                 const reshapedGrid = gridSamples.map((timestep: number[][], timeIdx: number) => {
                     const t = timeIdx / (gridSamples.length - 1);
@@ -307,12 +327,23 @@ export function createMainStateHandlers(state: MainState) {
         }
     }
 
+    let previousTrainingObjective: string | null = null;
     function handleTrainingObjectiveChange() {
         const configVal = get(config);
+        if (configVal.trainingObjective === previousTrainingObjective) return;
+        previousTrainingObjective = configVal.trainingObjective;
+        const supportedDatasets = Object.keys(settings.pretrainedModelPaths[configVal.trainingObjective] ?? {});
+        const datasetName = supportedDatasets.includes(configVal.datasetName)
+            ? configVal.datasetName : supportedDatasets[0] ?? configVal.datasetName;
         config.update(c => ({
             ...c,
-            sampler: settings.trainingObjectiveToSamplers[configVal.trainingObjective][0]
+            sampler: settings.trainingObjectiveToSamplers[configVal.trainingObjective][0],
+            activePlotTypes: settings.trainingObjectiveToDisplayOptions[configVal.trainingObjective]['Default Plot Types'],
+            datasetName,
         }));
+        if (settings.pretrainedModelPaths[configVal.trainingObjective]?.[get(config).datasetName]) {
+            modelState.update(m => ({ ...m, usePretrained: true }));
+        }
         handleDatasetChange();
     }
 
@@ -473,7 +504,9 @@ export function createMainStateHandlers(state: MainState) {
 
         // Handle training completion (natural or stopped)
         console.log('[startTraining] Setting up promise handlers for requestId:', requestId);
+        let modelReady = false;
         promise.then((result: { tfModelPath: string }) => {
+            modelReady = true;
             console.log('[startTraining] Promise RESOLVED - Training completed naturally');
             console.log('[startTraining] Model path:', result.tfModelPath);
             // Cache the model path for future use
@@ -492,7 +525,7 @@ export function createMainStateHandlers(state: MainState) {
         }).finally(() => {
             // Whether completed or stopped, sample from the trained model and play animation
             console.log('[startTraining] Promise FINALLY - sampling from model');
-            if (activeTrainingClient) {
+            if (activeTrainingClient && modelReady) {
                 finishTrainingAndSample(activeTrainingClient, configVal, jsonURL);
             } else {
                 console.error('[startTraining] No active client to sample from!');
@@ -515,13 +548,8 @@ export function createMainStateHandlers(state: MainState) {
             console.log('[stopTraining] Sending stop request and finishing training');
             // Send stop request to the worker
             activeTrainingClient.stopRequest(activeTrainingRequestId);
-            // The promise doesn't settle when stopped, so we handle finish directly here
-            const client = activeTrainingClient;
-            const configVal = get(config);
-            activeTrainingClient = null;
-            activeTrainingRequestId = null;
-            // Sample from whatever state the model is in and play animation
-            finishTrainingAndSample(client, configVal, null);
+            // The worker saves its partial model and resolves the training promise.
+            // The completion handler then samples using that saved path.
         } else {
             console.log('[stopTraining] No active training to stop');
         }

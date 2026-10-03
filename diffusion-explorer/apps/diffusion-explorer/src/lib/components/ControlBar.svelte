@@ -3,7 +3,7 @@
     import { getContext } from 'svelte';
     import { derived } from 'svelte/store';
     // Import components
-    import { DropDown, IconToggleButton as ToggleButton } from '@diffusion-explorer/ui';
+    import { DropDown, IconToggleButton as ToggleButton } from '@diffusion-explorer/ui/explorer';
     import MiniDistribution from '$lib/components/MiniDistribution.svelte';
     // Import settings
     import *  as settings from '$lib/settings';
@@ -40,7 +40,7 @@
 
 <style>
     .training-bar-container {
-        height: 120px;
+        min-height: 120px;
         width: 100%;
         background-color: rgb(243, 243, 243);
         position: relative;
@@ -51,19 +51,21 @@
     }
 
     .training-bar {
-        padding: 5px 0;
+        padding: 10px 16px;
+        box-sizing: border-box;
+        flex-wrap: wrap;
         display: flex;
         /* justify-content: center; */
         justify-content: left;
         align-items: center;
-        width: calc(var(--display-area-width) - 200px);
+        width: min(100%, calc(var(--display-area-width) - 200px));
         gap: 10px;
     }
 
     .menu {
         display: flex;
         flex-direction: column;
-        height: 100%;
+        height: auto;
     }
 
     .menu-contents {
@@ -81,6 +83,7 @@
         align-items: center;
         justify-content: center;
         gap: 10px;
+        flex-wrap: wrap;
         box-sizing: border-box;
     }
 
@@ -101,12 +104,12 @@
         flex-direction: row;
         align-items: center;
         justify-content: center;
-        height: 100%;
+        height: auto;
         gap: 20px;
     }
 
     .train-button-container { 
-        height: 100%;
+        height: auto;
     }
 
     .dataset-menu {
@@ -130,7 +133,7 @@
     }
 
     :global(.style-menu-button) {
-        height: 22px;
+        min-height: 32px;
         width: 80px;
     }
     .grid-2x2 {
@@ -184,18 +187,29 @@
         color: white;
     }
 
-    /* If the screen becomes less than 700 wide then change the flex direction */
+    @media (max-width: 1100px) {
+        .training-section-container { margin-left: 0; }
+        .dataset-menu { margin-left: 0; }
+        .training-bar { gap: 12px 20px; }
+    }
+
+    @media (pointer: coarse) {
+        :global(.style-menu-button) { min-height: 44px; }
+        :global(.train-button) { min-height: 44px; }
+    }
+
+    /* Wrap controls on smaller screens. */
     @media (max-width: 800px) {
         .training-bar-container {
             height: auto;
         }
 
         .training-bar {
-            flex-direction: column;
-            align-items: left;
-            justify-content: left;
+            flex-direction: row;
+            align-items: flex-start;
+            justify-content: flex-start;
             width: 100%;
-            padding: 10px 0;
+            padding: 10px 16px;
         }
 
         .training-section-container {
@@ -215,7 +229,7 @@
         }
 
         .training-bar-container {
-            padding-left: 20px;
+            box-sizing: border-box;
         }
     }
 
@@ -279,14 +293,14 @@
                         <MiniDistribution
                             data={data}
                             distributionId={name}
-                            disabled={$isTraining}
+                            disabled={$isTraining || ($config.trainingObjective === "Conditional Diffusion" && name !== "Three Modes")}
                         />
                     {/each}
                     <MiniDistribution
                         showBrush={true}
                         data={null}
                         distributionId="brush"
-                        disabled={$isTraining}
+                        disabled={$isTraining || $config.trainingObjective === "Conditional Diffusion"}
                     />
                 </div>
                 <span>

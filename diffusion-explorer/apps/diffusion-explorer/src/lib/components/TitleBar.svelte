@@ -15,7 +15,9 @@
 
     .title-inner-container {
         height: 100%;
-        width: calc(var(--display-area-width) - 200px);
+        width: min(100%, calc(var(--display-area-width) - 200px));
+        box-sizing: border-box;
+        gap: 16px;
         display: flex;
         flex-direction: row;
         padding: 0px 10px;
@@ -23,9 +25,10 @@
 
     .title {
         height: 100%;
-        width: 50%;
+        flex: 1;
+        min-width: 0;
         margin: 0;
-        font-size: 2.8em;
+        font-size: clamp(1.8rem, 4vw, 2.8em);
         color: white;
         font-family: var(--font-family);
         vertical-align: middle;
@@ -44,7 +47,8 @@
         /* width: var(--display-area-width); */
         /* margin: 0 auto; */
         margin: 0;
-        width: 50%;
+        flex: 1;
+        min-width: 0;
         font-size: 1.25em;
         color: white;
         font-family: var(--font-family);
@@ -95,6 +99,8 @@
         .title-inner-container {
             flex-direction: column;
             width: 100%;
+            gap: 0;
+            padding: 12px 16px;
         }
 
         .sub-title {

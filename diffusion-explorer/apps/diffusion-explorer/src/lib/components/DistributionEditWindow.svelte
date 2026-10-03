@@ -1,7 +1,7 @@
 <script lang="ts">
     import { getContext, onDestroy } from 'svelte';
     import { interfaceSettings, contourPlotSettings, scatterPlotSettings } from '$lib/settings';
-    import { computeContours, plotContours, drawScatterPlot } from '@diffusion-explorer/ui';
+    import { computeContours, plotContours, drawScatterPlot } from '@diffusion-explorer/ui/explorer';
 
     const pageState = getContext<any>("pageState");
     const { distributionData, isEditing } = pageState;
@@ -94,6 +94,7 @@
     }
 
     function handlePointerDown(event: PointerEvent) {
+        if (isDrawing || !event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
         const svg = event.currentTarget as SVGSVGElement;
         const pt = svg.createSVGPoint();
         pt.x = event.clientX;
@@ -156,6 +157,12 @@
 </script>
 
 <style>
+    .svg-overlay {
+        touch-action: none;
+        -webkit-user-select: none;
+        user-select: none;
+    }
+
     .edit-box {
         fill: transparent;
         stroke: rgb(0, 0, 0);

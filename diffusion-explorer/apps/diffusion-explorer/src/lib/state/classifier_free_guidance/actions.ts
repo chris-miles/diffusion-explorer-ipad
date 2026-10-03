@@ -16,8 +16,8 @@ import {
 } from '@diffusion-explorer/diffusion';
 
 // Worker URLs (bundled to static/workers/ for production)
-const flowModelWorkerUrl = '/workers/flow_model.worker.js';
-const diffusionModelWorkerUrl = '/workers/diffusion_model.worker.js';
+const flowModelWorkerUrl = base + '/workers/flow_model.worker.js';
+const diffusionModelWorkerUrl = base + '/workers/diffusion_model.worker.js';
 
 /**
  * Factory function that takes a state object and returns handlers bound to that state.
@@ -115,8 +115,8 @@ export function createCFGStateHandlers(cfgState: any) {
         console.log("Calling training worker with config: ", modelConfig);
 
         // Select appropriate client based on training objective
-        const workerUrl = trainingObjectiveVal === 'Flow Matching' ? flowModelWorkerUrl : diffusionModelWorkerUrl;
-        const client = trainingObjectiveVal === 'Flow Matching'
+        const workerUrl = trainingObjectiveVal !== 'Diffusion' ? flowModelWorkerUrl : diffusionModelWorkerUrl;
+        const client = trainingObjectiveVal !== 'Diffusion'
             ? new FlowModelClient(workerUrl, '', trainingObjectiveVal, modelConfig)
             : new DiffusionModelClient(workerUrl, '', modelConfig);
 
